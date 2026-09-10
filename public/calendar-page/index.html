@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Check Availability | Glow Aesthetics Lab</title>
+<script>
+  // ============================================================
+  // PAYMENT LINK: swap this one line for the real payment URL.
+  // The selected date and time are appended as ?date=YYYY-MM-DD&time=HH:MM
+  // (existing query params on the real link are kept).
+  // ============================================================
+  var PAYMENT_URL = "PAYMENT_URL_PLACEHOLDER";
+</script>
+<style>
+  :root{--gold:#BE7100;--gold-dark:#9c5d00;--cream:#faf6f0;--ink:#2b2622;--muted:#8a8178;--line:#eadfd2;--no:#d9d2c8;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;}
+  .page{max-width:560px;margin:0 auto;padding:32px 16px 48px;}
+  .brand{font-size:12px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold);font-weight:700;text-align:center;}
+  h1{font-size:26px;font-weight:600;text-align:center;margin-top:6px;}
+  .lead{font-size:14px;color:var(--muted);text-align:center;margin:10px 0 24px;line-height:1.5;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:22px;padding:20px;box-shadow:0 6px 24px rgba(43,38,34,.06);}
+  .cal-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+  .cal-month{font-size:18px;font-weight:600;}
+  .cal-nav{background:#fff;border:1px solid var(--line);width:40px;height:40px;border-radius:10px;font-size:20px;color:var(--gold);cursor:pointer;}
+  .cal-nav:disabled{opacity:.3;cursor:default;}
+  .cal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:8px;}
+  .cal-dow span{text-align:center;font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
+  .cal-cell{aspect-ratio:1/1;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:16px;border:1px solid transparent;}
+  .cal-cell .dot{width:6px;height:6px;border-radius:50%;margin-top:4px;}
+  .cal-cell.avail{background:#fff;border-color:var(--gold);cursor:pointer;font-weight:600;}
+  .cal-cell.avail .dot{background:var(--gold);}
+  .cal-cell.avail:hover,.cal-cell.avail:active{background:#fbefdd;}
+  .cal-cell.avail.sel{background:var(--gold);color:#fff;}
+  .cal-cell.avail.sel .dot{background:#fff;}
+  .cal-cell.full{background:#f1ebe1;color:var(--no);}
+  .cal-cell.full .dot{background:var(--no);}
+  .cal-cell.past{color:#d8cfc2;}
+  .legend{display:flex;gap:16px;justify-content:center;margin-top:16px;font-size:12px;color:var(--muted);}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .loading,.error{text-align:center;padding:40px 0;color:var(--muted);font-size:14px;}
+  .spin{width:26px;height:26px;border:3px solid var(--line);border-top-color:var(--gold);border-radius:50%;margin:0 auto 12px;animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .retry{margin-top:12px;background:none;border:1px solid var(--gold);color:var(--gold);padding:8px 16px;border-radius:10px;font-weight:600;cursor:pointer;}
+  .times{margin-top:20px;}
+  .times-date{font-size:17px;font-weight:600;margin-bottom:14px;}
+  .times-hint{font-size:14px;color:var(--muted);text-align:center;padding:8px 0;}
+  .times-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  @media(min-width:480px){.times-grid{grid-template-columns:repeat(4,1fr);}}
+  .time-chip{padding:13px 6px;border-radius:12px;text-align:center;font-size:15px;font-weight:600;border:1px solid var(--line);font-family:inherit;}
+  .time-chip.free{background:#fff;border-color:var(--gold);color:var(--ink);cursor:pointer;}
+  .time-chip.free:hover,.time-chip.free:active{background:#fbefdd;}
+  .time-chip.taken{background:#f1ebe1;color:var(--no);text-decoration:line-through;}
+  .time-chip.going{background:var(--gold);color:#fff;}
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="brand">Glow Aesthetics Lab</div>
+  <h1>Check Availability</h1>
+  <p class="lead">Pick a day, then a time, to continue to payment.</p>
+  <section class="card" aria-live="polite">
+    <div id="cal"></div>
+    <div id="times" class="times"></div>
+  </section>
+</main>
+
+<script>
+(function(){
+  // Live free slots come from the existing backend function (api/slots.js),
+  // the same endpoint widget.js calls. No GHL logic lives in this page.
+  var SLOTS_ENDPOINT = "/api/slots";
+
+  var MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var DOW=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+  var daysData = {};      // "YYYY-MM-DD" -> array of free ISO times
+  var monthState = {};    // "Y-M" -> "loading" | "ok" | "error"
+  var masterTimes = [];   // union of all slot times seen, e.g. ["08:00","08:30",...]
+  var view = new Date(); view.setDate(1);
+  var minMonth = new Date(); minMonth.setDate(1);
+  var maxMonth = new Date(); maxMonth.setDate(1); maxMonth.setMonth(maxMonth.getMonth()+2);
+  var chosenKey = null;
+
+  function pad(n){return (n<10?"0":"")+n;}
+  function dayKey(y,m,d){return y+"-"+pad(m+1)+"-"+pad(d);}
+  function timeOf(iso){return iso.split("T")[1].slice(0,5);} // clinic-local HH:MM from GHL ISO
+
+  function loadMonth(y,m){
+    var key=y+"-"+m;
+    if(monthState[key]==="ok"||monthState[key]==="loading"){renderCal();return;}
+    monthState[key]="loading"; renderCal();
+    var start=new Date(y,m,1).getTime();
+    var end=new Date(y,m+1,0,23,59,59).getTime();
+    fetch(SLOTS_ENDPOINT+"?startDate="+start+"&endDate="+end)
+      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(function(j){
+        if(j&&j.days){ for(var k in j.days){ daysData[k]=j.days[k]; } }
+        monthState[key]="ok"; rebuildMaster();
+      })
+      .catch(function(){ monthState[key]="error"; })
+      .then(function(){ renderCal(); renderTimes(); });
+  }
+
+  function rebuildMaster(){
+    var set={};
+    for(var k in daysData){ (daysData[k]||[]).forEach(function(iso){ set[timeOf(iso)]=1; }); }
+    masterTimes=Object.keys(set).sort();
+  }
+
+  function renderCal(){
+    var y=view.getFullYear(), m=view.getMonth(), key=y+"-"+m;
+    var prevOff=(y<minMonth.getFullYear()||(y===minMonth.getFullYear()&&m<=minMonth.getMonth()));
+    var nextOff=(y>maxMonth.getFullYear()||(y===maxMonth.getFullYear()&&m>=maxMonth.getMonth()));
+    var html='<div class="cal-top">'
+      +'<button class="cal-nav" aria-label="Previous month"'+(prevOff?' disabled':'')+' data-step="-1">&#8249;</button>'
+      +'<div class="cal-month">'+MONTHS[m]+' '+y+'</div>'
+      +'<button class="cal-nav" aria-label="Next month"'+(nextOff?' disabled':'')+' data-step="1">&#8250;</button></div>';
+
+    if(monthState[key]==="loading"){
+      html+='<div class="loading"><div class="spin"></div>Loading live availability...</div>';
+    } else if(monthState[key]==="error"){
+      html+='<div class="error">Sorry, we couldn\'t load availability just now.<br><button class="retry" data-retry="1">Try again</button></div>';
+    } else {
+      var startDow=(new Date(y,m,1).getDay()+6)%7;
+      var days=new Date(y,m+1,0).getDate();
+      var today=new Date(); today.setHours(0,0,0,0);
+      var cells="";
+      for(var i=0;i<startDow;i++) cells+='<div class="cal-cell"></div>';
+      for(var d=1; d<=days; d++){
+        var dt=new Date(y,m,d);
+        if(dt<today){ cells+='<div class="cal-cell past">'+d+'</div>'; continue; }
+        var k=dayKey(y,m,d);
+        if(daysData[k]&&daysData[k].length){
+          cells+='<div class="cal-cell avail'+(k===chosenKey?' sel':'')+'" role="button" tabindex="0" data-day="'+k+'">'+d+'<span class="dot"></span></div>';
+        } else {
+          cells+='<div class="cal-cell full">'+d+'<span class="dot"></span></div>';
+        }
+      }
+      html+='<div class="cal-dow">'+DOW.map(function(x){return '<span>'+x+'</span>';}).join("")+'</div>'
+        +'<div class="cal-grid">'+cells+'</div>'
+        +'<div class="legend"><span><i style="background:var(--gold)"></i>Available</span><span><i style="background:var(--no)"></i>Not available</span></div>';
+    }
+    document.getElementById("cal").innerHTML=html;
+  }
+
+  function renderTimes(){
+    var el=document.getElementById("times");
+    if(!chosenKey||!daysData[chosenKey]){
+      el.innerHTML = Object.keys(daysData).length ? '<p class="times-hint">Select a highlighted day to see times.</p>' : '';
+      return;
+    }
+    var p=chosenKey.split("-"), dt=new Date(+p[0],+p[1]-1,+p[2]);
+    var label=DOW[(dt.getDay()+6)%7]+' '+dt.getDate()+' '+MONTHS[dt.getMonth()];
+    var free={}; daysData[chosenKey].forEach(function(iso){ free[timeOf(iso)]=1; });
+    var grid=masterTimes.map(function(tm){
+      return free[tm]
+        ? '<button class="time-chip free" data-time="'+tm+'">'+tm+'</button>'
+        : '<div class="time-chip taken">'+tm+'</div>';
+    }).join("");
+    el.innerHTML='<div class="times-date">'+label+'</div><div class="times-grid">'+grid+'</div>'
+      +'<div class="legend"><span><i style="background:var(--gold)"></i>Available</span><span><i style="background:var(--no)"></i>Taken</span></div>';
+  }
+
+  function goToPayment(date,time){
+    var url=new URL(PAYMENT_URL, window.location.href);
+    url.searchParams.delete("date"); url.searchParams.delete("time");
+    // Built by hand so the colon stays readable: ?date=2026-09-15&time=14:30
+    url.search=(url.search ? url.search+"&" : "?")+"date="+date+"&time="+time;
+    window.location.href=url.toString();
+  }
+
+  document.addEventListener("click",function(e){
+    var t=e.target.closest("[data-step],[data-retry],[data-day],[data-time]");
+    if(!t||t.disabled) return;
+    if(t.hasAttribute("data-step")){
+      view.setMonth(view.getMonth()+Number(t.getAttribute("data-step")));
+      loadMonth(view.getFullYear(),view.getMonth());
+    } else if(t.hasAttribute("data-retry")){
+      delete monthState[view.getFullYear()+"-"+view.getMonth()];
+      loadMonth(view.getFullYear(),view.getMonth());
+    } else if(t.hasAttribute("data-day")){
+      chosenKey=t.getAttribute("data-day");
+      renderCal(); renderTimes();
+      document.getElementById("times").scrollIntoView({behavior:"smooth",block:"nearest"});
+    } else if(t.hasAttribute("data-time")){
+      t.classList.add("going"); t.textContent="...";
+      goToPayment(chosenKey, t.getAttribute("data-time"));
+    }
+  });
+  document.addEventListener("keydown",function(e){
+    if((e.key==="Enter"||e.key===" ")&&e.target.matches&&e.target.matches("[data-day]")){ e.preventDefault(); e.target.click(); }
+  });
+
+  loadMonth(view.getFullYear(),view.getMonth());
+})();
+</script>
+</body>
+</html>
