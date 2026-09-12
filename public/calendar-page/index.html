@@ -52,8 +52,9 @@
   .time-chip{padding:13px 6px;border-radius:12px;text-align:center;font-size:15px;font-weight:600;border:1px solid var(--line);font-family:inherit;}
   .time-chip.free{background:#fff;border-color:var(--gold);color:var(--ink);cursor:pointer;}
   .time-chip.free:hover,.time-chip.free:active{background:#fbefdd;}
-  .time-chip.taken{background:#f1ebe1;color:var(--no);text-decoration:line-through;}
-  .time-chip.going{background:var(--gold);color:#fff;}
+  /* Selection only. There is deliberately no "taken"/unavailable chip style:
+     the page never marks a slot unavailable by itself. */
+  .time-chip.sel{background:var(--gold);border-color:var(--gold);color:#fff;}
 </style>
 </head>
 <body>
@@ -78,11 +79,11 @@
 
   var daysData = {};      // "YYYY-MM-DD" -> array of free ISO times
   var monthState = {};    // "Y-M" -> "loading" | "ok" | "error"
-  var masterTimes = [];   // union of all slot times seen, e.g. ["08:00","08:30",...]
   var view = new Date(); view.setDate(1);
   var minMonth = new Date(); minMonth.setDate(1);
   var maxMonth = new Date(); maxMonth.setDate(1); maxMonth.setMonth(maxMonth.getMonth()+2);
   var chosenKey = null;
+  var sending = false;     // guards double taps only; never affects availability
 
   function pad(n){return (n<10?"0":"")+n;}
   function dayKey(y,m,d){return y+"-"+pad(m+1)+"-"+pad(d);}
@@ -98,16 +99,10 @@
       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
       .then(function(j){
         if(j&&j.days){ for(var k in j.days){ daysData[k]=j.days[k]; } }
-        monthState[key]="ok"; rebuildMaster();
+        monthState[key]="ok";
       })
       .catch(function(){ monthState[key]="error"; })
       .then(function(){ renderCal(); renderTimes(); });
-  }
-
-  function rebuildMaster(){
-    var set={};
-    for(var k in daysData){ (daysData[k]||[]).forEach(function(iso){ set[timeOf(iso)]=1; }); }
-    masterTimes=Object.keys(set).sort();
   }
 
   function renderCal(){
@@ -154,14 +149,19 @@
     }
     var p=chosenKey.split("-"), dt=new Date(+p[0],+p[1]-1,+p[2]);
     var label=DOW[(dt.getDay()+6)%7]+' '+dt.getDate()+' '+MONTHS[dt.getMonth()];
-    var free={}; daysData[chosenKey].forEach(function(iso){ free[timeOf(iso)]=1; });
-    var grid=masterTimes.map(function(tm){
-      return free[tm]
-        ? '<button class="time-chip free" data-time="'+tm+'">'+tm+'</button>'
-        : '<div class="time-chip taken">'+tm+'</div>';
+    // GHL's free-slots API returns ONLY the slots that are genuinely free.
+    // We render exactly those and nothing else, so the page never invents an
+    // unavailable/"Taken" slot of its own.
+    var times={}; daysData[chosenKey].forEach(function(iso){ times[timeOf(iso)]=1; });
+    var list=Object.keys(times).sort();
+    if(!list.length){
+      el.innerHTML='<div class="times-date">'+label+'</div><p class="times-hint">No times left on this day. Please pick another.</p>';
+      return;
+    }
+    var grid=list.map(function(tm){
+      return '<button class="time-chip free" data-time="'+tm+'">'+tm+'</button>';
     }).join("");
-    el.innerHTML='<div class="times-date">'+label+'</div><div class="times-grid">'+grid+'</div>'
-      +'<div class="legend"><span><i style="background:var(--gold)"></i>Available</span><span><i style="background:var(--no)"></i>Taken</span></div>';
+    el.innerHTML='<div class="times-date">'+label+'</div><div class="times-grid">'+grid+'</div>';
   }
 
   function goToPayment(date,time){
@@ -186,12 +186,24 @@
       renderCal(); renderTimes();
       document.getElementById("times").scrollIntoView({behavior:"smooth",block:"nearest"});
     } else if(t.hasAttribute("data-time")){
-      t.classList.add("going"); t.textContent="...";
-      goToPayment(chosenKey, t.getAttribute("data-time"));
+      if(sending) return;
+      sending=true;
+      // Selection feedback ONLY. The slot is never marked taken/unavailable here:
+      // it stays available to this and every other visitor unless GHL says otherwise.
+      var tm=t.getAttribute("data-time");
+      Array.prototype.forEach.call(document.querySelectorAll(".time-chip.sel"),function(c){ c.classList.remove("sel"); });
+      t.classList.add("sel"); t.textContent=tm+" \u2713";
+      goToPayment(chosenKey, tm);
     }
   });
   document.addEventListener("keydown",function(e){
     if((e.key==="Enter"||e.key===" ")&&e.target.matches&&e.target.matches("[data-day]")){ e.preventDefault(); e.target.click(); }
+  });
+
+  // Back from the payment page restores this page from cache. Clear the
+  // selection so nothing looks "held" - availability is re-read from GHL.
+  window.addEventListener("pageshow",function(e){
+    if(e.persisted){ sending=false; renderTimes(); }
   });
 
   loadMonth(view.getFullYear(),view.getMonth());
